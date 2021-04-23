@@ -1,6 +1,7 @@
 package cc.fovea.openwith;
 
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
@@ -9,6 +10,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.webkit.URLUtil;
+
 import java.io.IOException;
 import java.io.InputStream;
 import org.json.JSONArray;
@@ -30,19 +33,23 @@ class Serializer {
             final ContentResolver contentResolver,
             final Intent intent)
             throws JSONException {
-        JSONArray items = null;
+        JSONArray items = new JSONArray();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            items = itemsFromClipData(contentResolver, intent.getClipData());
+            items = itemsFromClipData(contentResolver, intent);
         }
-        if (items == null || items.length() == 0) {
-            items = itemsFromExtras(contentResolver, intent.getExtras());
+        if (items.length() == 0) {
+            JSONObject item = itemFromExtras(contentResolver, intent.getExtras());
+            if(item != null){
+                items.put(item);
+            }
         }
-        if (items == null || items.length() == 0) {
-            items = itemsFromData(contentResolver, intent.getData());
+        if (items.length() == 0) {
+            JSONObject item = itemFromData(contentResolver, intent.getData());
+            if(item != null){
+                items.put(item);
+            }
         }
-        if (items == null) {
-            return null;
-        }
+
         final JSONObject action = new JSONObject();
         action.put("action", translateAction(intent.getAction()));
         action.put("exit", readExitOnSent(intent.getExtras()));
@@ -52,7 +59,7 @@ class Serializer {
 
     public static String translateAction(final String action) {
         if ("android.intent.action.SEND".equals(action) ||
-            "android.intent.action.SEND_MULTIPLE".equals(action)) {
+                "android.intent.action.SEND_MULTIPLE".equals(action)) {
             return "SEND";
         } else if ("android.intent.action.VIEW".equals(action)) {
             return "VIEW";
@@ -70,64 +77,91 @@ class Serializer {
         return extras.getBoolean("exit_on_sent", false);
     }
 
-    /** Extract the list of items from clip data (if available).
-     *
-     * Defaults to null. */
+    /** Extract the list of items from clip data (if available). */
     public static JSONArray itemsFromClipData(
             final ContentResolver contentResolver,
-            final ClipData clipData)
+            final Intent intent)
             throws JSONException {
+        ClipData clipData = intent.getClipData();
         if (clipData != null) {
             final int clipItemCount = clipData.getItemCount();
             JSONObject[] items = new JSONObject[clipItemCount];
             for (int i = 0; i < clipItemCount; i++) {
-                items[i] = toJSONObject(contentResolver, clipData.getItemAt(i).getUri());
+                ClipDescription clipDescription = clipData.getDescription();
+                if(clipDescription.hasMimeType("text/uri-list")){
+                    JSONObject item = urlFromExtra(extras);
+                    if(item != null){
+                        items[i] = item;
+                    }
+                } else {
+                    ClipData.Item clipItem = clipData.getItemAt(i);
+                    if(clipDescription.hasMimeType("text/plain")){
+                        if(URLUtil.isValidUrl(clipItem.getText().toString())){
+                            JSONObject item = urlFromExtra(intent.getExtras());
+                            if(item != null){
+                                items[i] = item;
+                                continue;
+                            }
+                        }
+                    }
+                    JSONObject item = toJSONObject(contentResolver, clipItem.getUri());
+                    if(item != null){
+                        items[i] = item;
+                    } else {
+                        items[i] = itemFromData(contentResolver, intent.getData());
+                    }
+                }
             }
             return new JSONArray(items);
         }
-        return null;
+        return new JSONArray();
     }
 
     /** Extract the list of items from the intent's extra stream.
      *
      * See Intent.EXTRA_STREAM for details. */
-    public static JSONArray itemsFromExtras(
+    public static JSONObject itemFromExtras(
             final ContentResolver contentResolver,
             final Bundle extras)
             throws JSONException {
         if (extras == null) {
             return null;
         }
-        final JSONObject item = toJSONObject(
+
+        return toJSONObject(
                 contentResolver,
                 (Uri) extras.get(Intent.EXTRA_STREAM));
-        if (item == null) {
+    }
+
+    /** Extract the url from the intent's extra.
+     *
+     * See Intent.TEXT for details. */
+    public static JSONObject urlFromExtra(
+            final Bundle extras)
+            throws JSONException {
+        if (extras == null) {
             return null;
         }
-        final JSONObject[] items = new JSONObject[1];
-        items[0] = item;
-        return new JSONArray(items);
+
+        final JSONObject json = new JSONObject();
+        json.put("url", extras.getString("android.intent.extra.TEXT"));
+        json.put("title", extras.getString("android.intent.extra.SUBJECT"));
+        return json;
     }
 
     /** Extract the list of items from the intent's getData
      *
      * See Intent.ACTION_VIEW for details. */
-    public static JSONArray itemsFromData(
+    public static JSONObject itemFromData(
             final ContentResolver contentResolver,
             final Uri uri)
             throws JSONException {
         if (uri == null) {
             return null;
         }
-        final JSONObject item = toJSONObject(
+        return toJSONObject(
                 contentResolver,
                 uri);
-        if (item == null) {
-            return null;
-        }
-        final JSONObject[] items = new JSONObject[1];
-        items[0] = item;
-        return new JSONArray(items);
     }
 
     /** Convert an Uri to JSON object.
@@ -167,26 +201,26 @@ class Serializer {
         }
     }
 
-	/** Convert the Uri to the direct file system path of the image file.
+    /** Convert the Uri to the direct file system path of the image file.
      *
      * source: https://stackoverflow.com/questions/20067508/get-real-path-from-uri-android-kitkat-new-storage-access-framework/20402190?noredirect=1#comment30507493_20402190 */
-	public static String getRealPathFromURI(
+    public static String getRealPathFromURI(
             final ContentResolver contentResolver,
             final Uri uri) {
-		final String[] proj = { MediaStore.Images.Media.DATA };
-		final Cursor cursor = contentResolver.query(uri, proj, null, null, null);
-		if (cursor == null) {
-			return "";
-		}
-		final int column_index = cursor.getColumnIndex(MediaStore.Images.Media.DATA);
-		if (column_index < 0) {
-			cursor.close();
-			return "";
-		}
-		cursor.moveToFirst();
-		final String result = cursor.getString(column_index);
-		cursor.close();
-		return result;
-	}
+        final String[] proj = { MediaStore.Images.Media.DATA };
+        final Cursor cursor = contentResolver.query(uri, proj, null, null, null);
+        if (cursor == null) {
+            return "";
+        }
+        final int column_index = cursor.getColumnIndex(MediaStore.Images.Media.DATA);
+        if (column_index < 0) {
+            cursor.close();
+            return "";
+        }
+        cursor.moveToFirst();
+        final String result = cursor.getString(column_index);
+        cursor.close();
+        return result;
+    }
 }
 // vim: ts=4:sw=4:et
