@@ -89,7 +89,7 @@ class Serializer {
             for (int i = 0; i < clipItemCount; i++) {
                 ClipDescription clipDescription = clipData.getDescription();
                 if(clipDescription.hasMimeType("text/uri-list")){
-                    JSONObject item = urlFromExtra(extras);
+                    JSONObject item = urlFromExtra(intent.getExtras());
                     if(item != null){
                         items[i] = item;
                     }
