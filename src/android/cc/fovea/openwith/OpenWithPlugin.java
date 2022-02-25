@@ -208,12 +208,14 @@ public class OpenWithPlugin extends CordovaPlugin {
      */
     @Override
     public void onNewIntent(final Intent intent) {
-        log(DEBUG, "onNewIntent() " + intent.getAction());
-        final JSONObject json = toJSONObject(intent);
-        if (json != null) {
-            pendingIntents.add(json);
+        if(!intent.getAction().equals(Intent.ACTION_INSERT)){
+            log(DEBUG, "onNewIntent() " + intent.getAction());
+            final JSONObject json = toJSONObject(intent);
+            if (json != null) {
+                pendingIntents.add(json);
+            }
+            processPendingIntents();
         }
-        processPendingIntents();
     }
 
     /**
